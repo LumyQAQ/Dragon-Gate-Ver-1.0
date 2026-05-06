@@ -170,6 +170,14 @@ traj_all_df = load_trajectory_data(days=45)
 
 if not df.empty:
     tab1, tab2 = st.tabs(["🌌 全市场横截面 (今日战况)", "☄️ 单板块轨迹与微观穿透 (时光机)"])
+    # ... (这里是你原本那一长串画图的代码) ...
+
+# 👇 把下面这段加在整个 if 的外面（与 if 对齐）
+else:
+    st.error("⚠️ 数据加载失败：未能在云端检测到有效的数据文件。")
+    st.info("请检查 GitHub 仓库中是否已完整上传 `rrg_daily_result.csv` 和 `sample_data.db` 文件。")
+    if debug_log:
+        st.write("🔍 调试报错信息:", debug_log)
 
     # ------------------ 标签 1：全局视角 ------------------
     with tab1:
