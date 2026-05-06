@@ -20,7 +20,7 @@ def create_sample_db():
     try:
         # 1. 抓取最近的 10 个交易日
         print("📅 正在定位最近的 10 个交易日...")
-        dates_df = pd.read_sql("SELECT DISTINCT 日期 FROM stock_daily ORDER BY 日期 DESC LIMIT 10", conn_src)
+        dates_df = pd.read_sql("SELECT DISTINCT 日期 FROM stock_daily ORDER BY 日期 DESC LIMIT 45", conn_src)
         recent_dates = dates_df['日期'].tolist()
 
         if not recent_dates:
