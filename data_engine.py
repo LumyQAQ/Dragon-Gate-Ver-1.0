@@ -5,8 +5,7 @@ import os
 from datetime import datetime, timedelta
 from tqdm import tqdm
 
-
-# 数据库文件路径（会自动在当前目录生成）
+# 下面是你的代码正文...
 DB_PATH = "A_share_data.db"
 
 
@@ -77,7 +76,27 @@ def update_daily_kline(conn, init_start_date="20240101"):
     """增量更新：全市场 A 股日线数据 (前复权)"""
     print("正在获取全市场有效股票代码...")
     # 获取实时行情表（仅用作获取最新的有效代码列表）
-    spot_df = ak.stock_zh_a_spot_em()
+    import time
+
+    # --- 替换原来的 spot_df = ak.stock_zh_a_spot_em() ---
+    print("🕵️ 正在尝试连接行情服务器获取全市场代码...")
+    spot_df = pd.DataFrame()
+    max_retries = 3
+
+    for attempt in range(max_retries):
+        try:
+            spot_df = ak.stock_zh_a_spot_em()
+            print("✅ 成功穿透防火墙，获取到市场代码！")
+            break
+        except Exception as e:
+            wait_time = 10 * (attempt + 1)
+            print(f"⚠️ 第 {attempt + 1} 次连接被阻断，原地假死 {wait_time} 秒后重试...")
+            time.sleep(wait_time)
+
+    if spot_df.empty:
+        raise ConnectionError(
+            "❌ 致命错误：连续3次被东方财富服务器拒绝连接，请切换网络环境（如切换手机热点或更改代理节点）后再试。")
+    # --------------------------------------------------
     codes = spot_df['代码'].astype(str)
     # 过滤：只保留沪深主板 (60, 00) 和 创业板/科创板 (300, 688)
     valid_codes = codes[codes.str.match(r'^(00|300|60|688)\d{4}$')]
@@ -123,7 +142,7 @@ if __name__ == "__main__":
     connection = get_db_connection()
 
     # 1. 更新行业映射（成分股变化不大，平时可注释掉，每月跑一次即可）
-    update_industry_mapping(connection)
+    # update_industry_mapping(connection)
 
     # 2. 更新全市场日线（首次运行需要大概半小时到一小时，以后每天只需几分钟）
     print("开始更新全市场K线数据...")
