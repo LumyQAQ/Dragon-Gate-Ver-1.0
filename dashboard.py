@@ -120,49 +120,58 @@ def load_trajectory_data(days=35):
     db_path = "./sample_data.db"
     if not os.path.exists(db_path): return pd.DataFrame()
 
-    conn = sqlite3.connect(db_path)
-    dates_query = f"SELECT DISTINCT 日期 FROM stock_daily ORDER BY 日期 DESC LIMIT {days}"
-    recent_dates = pd.read_sql(dates_query, conn)['日期'].tolist()
-    if not recent_dates: return pd.DataFrame()
+    try:
+        conn = sqlite3.connect(db_path)
+        # 尝试读取日期表
+        dates_query = f"SELECT DISTINCT 日期 FROM stock_daily ORDER BY 日期 DESC LIMIT {days}"
+        recent_dates = pd.read_sql(dates_query, conn)['日期'].tolist()
+        if not recent_dates:
+            conn.close()
+            return pd.DataFrame()
 
-    placeholders = ','.join(['?'] * len(recent_dates))
-    daily_df = pd.read_sql(f"SELECT 代码, 日期, 涨跌幅 FROM stock_daily WHERE 日期 IN ({placeholders})", conn,
-                           params=recent_dates)
-    ind_df = pd.read_sql("SELECT 代码, 行业名称 FROM stock_industry", conn)
-    conn.close()
+        # 尝试读取 K 线表和行业表
+        placeholders = ','.join(['?'] * len(recent_dates))
+        daily_df = pd.read_sql(f"SELECT 代码, 日期, 涨跌幅 FROM stock_daily WHERE 日期 IN ({placeholders})", conn,
+                               params=recent_dates)
+        ind_df = pd.read_sql("SELECT 代码, 行业名称 FROM stock_industry", conn)
+        conn.close()
 
-    daily_df['代码'] = clean_stock_code(daily_df['代码'])
-    ind_df['代码'] = clean_stock_code(ind_df['代码'])
-    df = pd.merge(daily_df, ind_df, on='代码', how='inner')
-    df['涨跌幅'] = pd.to_numeric(df['涨跌幅'], errors='coerce').fillna(0)
+        daily_df['代码'] = clean_stock_code(daily_df['代码'])
+        ind_df['代码'] = clean_stock_code(ind_df['代码'])
+        df = pd.merge(daily_df, ind_df, on='代码', how='inner')
+        df['涨跌幅'] = pd.to_numeric(df['涨跌幅'], errors='coerce').fillna(0)
 
-    sector_daily = df.groupby(['日期', '行业名称'])['涨跌幅'].mean().reset_index()
-    sector_pivot = sector_daily.pivot(index='日期', columns='行业名称', values='涨跌幅').fillna(0)
+        sector_daily = df.groupby(['日期', '行业名称'])['涨跌幅'].mean().reset_index()
+        sector_pivot = sector_daily.pivot(index='日期', columns='行业名称', values='涨跌幅').fillna(0)
 
-    sector_index = (1 + sector_pivot / 100).cumprod() * 1000
-    bench_index = sector_index.mean(axis=1)
+        sector_index = (1 + sector_pivot / 100).cumprod() * 1000
+        bench_index = sector_index.mean(axis=1)
 
-    rs_window, mom_window, smooth_window = 20, 5, 3
-    bench_return = (bench_index / bench_index.shift(rs_window)) - 1
+        rs_window, mom_window, smooth_window = 20, 5, 3
+        bench_return = (bench_index / bench_index.shift(rs_window)) - 1
 
-    traj_results = []
-    for sector in sector_index.columns:
-        sec_return = (sector_index[sector] / sector_index[sector].shift(rs_window)) - 1
-        raw_rs = sec_return - bench_return
-        smooth_rs = raw_rs.rolling(window=smooth_window).mean()
-        raw_mom = smooth_rs - smooth_rs.shift(mom_window)
-        smooth_mom = raw_mom.rolling(window=smooth_window).mean()
+        traj_results = []
+        for sector in sector_index.columns:
+            sec_return = (sector_index[sector] / sector_index[sector].shift(rs_window)) - 1
+            raw_rs = sec_return - bench_return
+            smooth_rs = raw_rs.rolling(window=smooth_window).mean()
+            raw_mom = smooth_rs - smooth_rs.shift(mom_window)
+            smooth_mom = raw_mom.rolling(window=smooth_window).mean()
 
-        temp_df = pd.DataFrame({
-            '日期': sector_index.index,
-            '行业名称': sector,
-            '相对强弱_X': smooth_rs * 100,
-            '动量_Y': smooth_mom * 100
-        }).dropna()
-        traj_results.append(temp_df)
+            temp_df = pd.DataFrame({
+                '日期': sector_index.index,
+                '行业名称': sector,
+                '相对强弱_X': smooth_rs * 100,
+                '动量_Y': smooth_mom * 100
+            }).dropna()
+            traj_results.append(temp_df)
 
-    if traj_results:
-        return pd.concat(traj_results, ignore_index=True)
+        if traj_results:
+            return pd.concat(traj_results, ignore_index=True)
+    except Exception as e:
+        # 💥 捕捉到数据库缺失表或格式错误，静默返回空数据，防止页面崩溃
+        print(f"时光机数据加载失败: {e}")
+
     return pd.DataFrame()
 
 
