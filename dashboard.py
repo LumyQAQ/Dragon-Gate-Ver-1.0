@@ -112,10 +112,10 @@ def load_cross_section_data():
     return df, limit_up_df, top10_5d_df, debug_log
 
 # ==========================================
-# 💾 数据引擎 2：轨迹时光机
+# 💾 数据引擎 2：轨迹时光机 (自适应雷达版)
 # ==========================================
 @st.cache_data
-def load_trajectory_data(days=35):
+def load_trajectory_data(days=45):
     db_path = "./sample_data.db"
     if not os.path.exists(db_path): return pd.DataFrame()
     
@@ -143,7 +143,23 @@ def load_trajectory_data(days=35):
         sector_index = (1 + sector_pivot / 100).cumprod() * 1000
         bench_index = sector_index.mean(axis=1)
         
-        rs_window, mom_window, smooth_window = 20, 5, 3
+        # 🔥 核心魔法：自适应数据长度的动态窗口！
+        available_days = len(sector_index)
+        if available_days < 5:
+            # 数据少于5天，确实无法算出动能，只能返回空
+            return pd.DataFrame()
+        elif available_days < 20:
+            # 冷启动期 (比如只有10天数据)：极速微观窗口
+            rs_window = max(1, available_days // 3)
+            mom_window = max(1, available_days // 4)
+            smooth_window = 1
+        elif available_days < 35:
+            # 数据中等：过渡期窗口
+            rs_window, mom_window, smooth_window = 10, 3, 2
+        else:
+            # 数据充足：标准 RRG 经典窗口
+            rs_window, mom_window, smooth_window = 20, 5, 3
+        
         bench_return = (bench_index / bench_index.shift(rs_window)) - 1
         
         traj_results = []
