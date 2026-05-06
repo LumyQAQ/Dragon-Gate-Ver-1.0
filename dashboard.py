@@ -19,19 +19,19 @@ def clean_stock_code(series):
 # ==========================================
 @st.cache_data
 def load_cross_section_data():
-    csv_path = "/Users/ziranfeng/Desktop/轮动图/rrg_daily_result.csv"
-    db_path = "/Users/ziranfeng/Desktop/轮动图/A_share_data.db"
+    csv_path = "./rrg_daily_result.csv"
+    db_path = "./sample_data.db"
 
     df = pd.DataFrame()
     limit_up_df = pd.DataFrame(columns=['股票名称', '股票代码', '涨跌幅(%)', '所属板块', '成交额'])
     top10_5d_df = pd.DataFrame(columns=['排名', '股票名称', '股票代码', '5日涨幅(%)', '所属板块'])
+    debug_log = {}
 
     if os.path.exists(csv_path):
         df = pd.read_csv(csv_path)
     else:
-        return df, limit_up_df, top10_5d_df, {}
+        debug_log["Error_CSV"] = "找不到 rrg_daily_result.csv"
 
-    debug_log = {}
     if os.path.exists(db_path):
         try:
             conn = sqlite3.connect(db_path)
@@ -67,7 +67,6 @@ def load_cross_section_data():
                 detail_df = pd.merge(t0_df, ind_df, on='代码', how='inner')
                 name_col = '名称' if '名称' in detail_df.columns else '股票名称'
 
-                # 🔥 涨停标的捕捉 (主板标准 >= 9.8%)
                 limit_up_raw = detail_df[detail_df['涨跌幅'] >= 9.8].copy()
                 if not limit_up_raw.empty:
                     limit_up_df = limit_up_raw[[name_col, '代码', '涨跌幅', '行业名称', '成交额']]
@@ -75,13 +74,12 @@ def load_cross_section_data():
                     limit_up_df = limit_up_df.sort_values(by=['所属板块', '涨跌幅(%)'],
                                                           ascending=[True, False]).reset_index(drop=True)
 
-                # 🔥 新增：全市场 5日涨幅 Top 10 捕捉
                 top10_raw = detail_df.nlargest(10, '5日涨幅').copy()
                 if not top10_raw.empty:
                     top10_5d_df = top10_raw[[name_col, '代码', '5日涨幅', '行业名称']]
                     top10_5d_df.columns = ['股票名称', '股票代码', '5日涨幅(%)', '所属板块']
                     top10_5d_df.reset_index(drop=True, inplace=True)
-                    top10_5d_df.index = top10_5d_df.index + 1  # 让索引从 1 开始，作为排名
+                    top10_5d_df.index = top10_5d_df.index + 1
 
                 sector_info = []
                 for sector, group in detail_df.groupby('行业名称'):
@@ -107,7 +105,10 @@ def load_cross_section_data():
                 info_df = pd.DataFrame(sector_info)
                 df = pd.merge(df, info_df, on='行业名称', how='left').fillna("无匹配标的")
         except Exception as e:
-            debug_log['Error'] = str(e)
+            debug_log['Error_DB'] = str(e)
+    else:
+        debug_log["Error_DB"] = "找不到 sample_data.db"
+
     return df, limit_up_df, top10_5d_df, debug_log
 
 
@@ -116,7 +117,7 @@ def load_cross_section_data():
 # ==========================================
 @st.cache_data
 def load_trajectory_data(days=35):
-    db_path = "/Users/ziranfeng/Desktop/轮动图/A_share_data.db"
+    db_path = "./sample_data.db"
     if not os.path.exists(db_path): return pd.DataFrame()
 
     conn = sqlite3.connect(db_path)
@@ -165,32 +166,36 @@ def load_trajectory_data(days=35):
     return pd.DataFrame()
 
 
+# ==========================================
+# 📊 前端渲染主逻辑
+# ==========================================
 df, limit_up_df, top10_5d_df, debug_log = load_cross_section_data()
 traj_all_df = load_trajectory_data(days=45)
 
+# 这里就是核心的分支逻辑
 if not df.empty:
     tab1, tab2 = st.tabs(["🌌 全市场横截面 (今日战况)", "☄️ 单板块轨迹与微观穿透 (时光机)"])
-    # ... (这里是你原本那一长串画图的代码) ...
 
-# 👇 把下面这段加在整个 if 的外面（与 if 对齐）
-else:
-    st.error("⚠️ 数据加载失败：未能在云端检测到有效的数据文件。")
-    st.info("请检查 GitHub 仓库中是否已完整上传 `rrg_daily_result.csv` 和 `sample_data.db` 文件。")
-    if debug_log:
-        st.write("🔍 调试报错信息:", debug_log)
-
-    # ------------------ 标签 1：全局视角 ------------------
     with tab1:
-        top_bubble_sectors = df.nlargest(15, '突破动能得分_气泡大小')['行业名称'].tolist()
+        # 为了容错，增加列是否存在判断
+        has_bubble_col = '突破动能得分_气泡大小' in df.columns
+        top_bubble_sectors = df.nlargest(15, '突破动能得分_气泡大小')['行业名称'].tolist() if has_bubble_col else df[
+            '行业名称'].tolist()[:15]
+
         df['显示名称'] = df.apply(
-            lambda r: r['行业名称'] if r['行业名称'] in top_bubble_sectors or abs(r['动量_Y']) > 5 or r[
-                '相对强弱_X'] > 15 else "", axis=1)
+            lambda r: r['行业名称'] if r['行业名称'] in top_bubble_sectors or abs(r.get('动量_Y', 0)) > 5 or r.get(
+                '相对强弱_X', 0) > 15 else "", axis=1)
+
+        size_col = "突破动能得分_气泡大小" if has_bubble_col else None
 
         fig = px.scatter(
-            df, x="相对强弱_X", y="动量_Y", size="突破动能得分_气泡大小", color="板块5日平均涨幅",
+            df, x="相对强弱_X", y="动量_Y", size=size_col,
+            color="板块5日平均涨幅" if "板块5日平均涨幅" in df.columns else None,
             color_continuous_scale="RdYlGn_r", text="显示名称",
-            custom_data=["行业名称", "相对强弱_X", "动量_Y", "板块5日平均涨幅", "突破动能得分_气泡大小", "1日龙头",
-                         "3日龙头", "5日龙头", "核心中军"],
+            custom_data=["行业名称", "相对强弱_X", "动量_Y",
+                         "板块5日平均涨幅" if "板块5日平均涨幅" in df.columns else "动量_Y",
+                         "突破动能得分_气泡大小" if has_bubble_col else "动量_Y", "1日龙头", "3日龙头", "5日龙头",
+                         "核心中军"],
             size_max=60, height=850
         )
 
@@ -235,7 +240,6 @@ else:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        # 🔥 新增：绝美的并排双列表布局
         st.markdown("---")
         col_table1, col_table2 = st.columns(2)
 
@@ -266,12 +270,11 @@ else:
             else:
                 st.info("💡 暂无 5日 涨幅数据")
 
-    # ------------------ 标签 2：时光机轨迹 + 微观穿透 ------------------
     with tab2:
         if not traj_all_df.empty:
             col_sel, col_empty = st.columns([1, 3])
             with col_sel:
-                default_sector = df.sort_values('突破动能得分_气泡大小', ascending=False)['行业名称'].iloc[0]
+                default_sector = df.sort_values('相对强弱_X', ascending=False)['行业名称'].iloc[0]
                 target_sector = st.selectbox(
                     "🔍 选择目标板块 (支持打字自动联想搜索)",
                     traj_all_df['行业名称'].unique(),
@@ -337,7 +340,6 @@ else:
             fig_traj.add_hline(y=0, line_color="#7f8c8d", opacity=0.6, line_width=1)
             fig_traj.add_vline(x=0, line_color="#7f8c8d", opacity=0.6, line_width=1)
             fig_traj.update_layout(
-                annotations=annotations + list(fig_traj.layout.annotations),
                 template="plotly_white", margin=dict(l=20, r=20, t=40, b=20), height=650,
                 xaxis=dict(title="相对强弱 (X)", zeroline=False, gridcolor='#ecf0f1'),
                 yaxis=dict(title="动量 (Y)", zeroline=False, gridcolor='#ecf0f1'),
@@ -349,25 +351,27 @@ else:
         else:
             st.warning("⚠️ 时光机数据准备中：请检查 K 线历史数据是否足够长。")
 
-            # ------------------ 底部：数据明细 ------------------
-            st.markdown("---")
-            st.subheader("📋 宏微观异动数据汇总")
-            st.dataframe(df[['行业名称', '突破动能得分_气泡大小', '相对强弱_X', '动量_Y', '1日龙头', '3日龙头',
-                             '5日龙头', '核心中军']].style.background_gradient(cmap='Reds',
-                                                                               subset=['突破动能得分_气泡大小']),
-                         height=400)
+    st.markdown("---")
+    st.subheader("📋 宏微观异动数据汇总")
+    if '突破动能得分_气泡大小' in df.columns:
+        st.dataframe(df[['行业名称', '突破动能得分_气泡大小', '相对强弱_X', '动量_Y', '1日龙头', '3日龙头', '5日龙头',
+                         '核心中军']].style.background_gradient(cmap='Reds', subset=['突破动能得分_气泡大小']),
+                     height=400)
+    else:
+        st.dataframe(df, height=400)
 
-        else:
-        st.error("🚨 致命错误：数据未能成功加载，页面渲染终止！")
+# 和上面的 if not df.empty: 严格对齐的 else
+else:
+    st.error("🚨 致命错误：数据未能成功加载，页面渲染终止！")
 
-        st.markdown("### 🔍 云端探照灯（调试信息）")
-        st.info(f"**当前云端工作目录的文件列表：**\n{os.listdir('.')}")
+    st.markdown("### 🔍 云端探照灯（调试信息）")
+    st.info(f"**当前云端工作目录的文件列表：**\n{os.listdir('.')}")
 
-        st.write(f"1️⃣ CSV 宏观数据文件是否存在？: **{os.path.exists('./rrg_daily_result.csv')}**")
-        st.write(f"2️⃣ SQLite 微观数据库是否存在？: **{os.path.exists('./sample_data.db')}**")
+    st.write(f"1️⃣ CSV 宏观数据文件是否存在？: **{os.path.exists('./rrg_daily_result.csv')}**")
+    st.write(f"2️⃣ SQLite 微观数据库是否存在？: **{os.path.exists('./sample_data.db')}**")
 
-        if debug_log:
-            st.warning("⚠️ 数据库底层报错日志：")
-            st.json(debug_log)
-        else:
-            st.success("✅ 数据库底层代码无报错，问题大概率出在文件路径或数据源为空。")
+    if debug_log:
+        st.warning("⚠️ 数据库底层报错日志：")
+        st.json(debug_log)
+    else:
+        st.success("✅ 数据库底层代码无报错，问题大概率出在文件路径或数据源为空。")
