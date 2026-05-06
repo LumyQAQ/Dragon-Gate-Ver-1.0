@@ -349,8 +349,25 @@ else:
         else:
             st.warning("⚠️ 时光机数据准备中：请检查 K 线历史数据是否足够长。")
 
-    # ------------------ 底部：数据明细 ------------------
-    st.markdown("---")
-    st.subheader("📋 宏微观异动数据汇总")
-    st.dataframe(df[['行业名称', '突破动能得分_气泡大小', '相对强弱_X', '动量_Y', '1日龙头', '3日龙头', '5日龙头',
-                     '核心中军']].style.background_gradient(cmap='Reds', subset=['突破动能得分_气泡大小']), height=400)
+        # ------------------ 底部：数据明细 ------------------
+        st.markdown("---")
+        st.subheader("📋 宏微观异动数据汇总")
+        st.dataframe(df[['行业名称', '突破动能得分_气泡大小', '相对强弱_X', '动量_Y', '1日龙头', '3日龙头', '5日龙头',
+                         '核心中军']].style.background_gradient(cmap='Reds', subset=['突破动能得分_气泡大小']),
+                     height=400)
+
+    # 👇 下面这段就是我们加的“探照灯”，一定要和最上面的 if not df.empty: 保持对齐
+    else:
+    st.error("🚨 致命错误：数据未能成功加载，页面渲染终止！")
+
+    st.markdown("### 🔍 云端探照灯（调试信息）")
+    st.info(f"**当前云端工作目录的文件列表：**\n{os.listdir('.')}")
+
+    st.write(f"1️⃣ CSV 宏观数据文件是否存在？: **{os.path.exists('./rrg_daily_result.csv')}**")
+    st.write(f"2️⃣ SQLite 微观数据库是否存在？: **{os.path.exists('./sample_data.db')}**")
+
+    if debug_log:
+        st.warning("⚠️ 数据库底层报错日志：")
+        st.json(debug_log)
+    else:
+        st.success("✅ 数据库底层代码无报错，问题大概率出在文件路径或数据源为空。")                     '核心中军']].style.background_gradient(cmap='Reds', subset=['突破动能得分_气泡大小']), height=400)
