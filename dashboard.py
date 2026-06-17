@@ -5,6 +5,8 @@ import plotly.graph_objects as go
 import sqlite3
 import os
 
+from config import DB_PATH, RRG_CSV_PATH
+
 st.set_page_config(page_title="城门立木龙头战法观察图（仅沪深主板版）", layout="wide")
 st.title("🐲 城门立木龙头战法观察图（仅沪深主板版）")
 
@@ -12,88 +14,98 @@ def clean_stock_code(series):
     s = series.astype(str).str.replace(r'\.0$', '', regex=True).str.replace(r'\D', '', regex=True)
     return s.str.zfill(6)
 
+
+def file_signature(path):
+    try:
+        return (str(path), os.path.getmtime(path), os.path.getsize(path))
+    except OSError:
+        return (str(path), None, None)
+
+
 # ==========================================
 # 💾 数据引擎 1：横截面与微观穿透数据
 # ==========================================
 @st.cache_data
-def load_cross_section_data():
-    csv_path = "./rrg_daily_result.csv"
-    db_path = "./sample_data.db" 
-    
+def load_cross_section_data(csv_signature=None, db_signature=None):
+    csv_path = RRG_CSV_PATH
+    db_path = DB_PATH
+
     df = pd.DataFrame()
     limit_up_df = pd.DataFrame(columns=['股票名称', '股票代码', '涨跌幅(%)', '所属板块', '成交额'])
     top10_5d_df = pd.DataFrame(columns=['排名', '股票名称', '股票代码', '5日涨幅(%)', '所属板块'])
     debug_log = {}
 
     # 1. 读 CSV 宏观数据
-    if os.path.exists(csv_path): 
+    if os.path.exists(csv_path):
         df = pd.read_csv(csv_path)
-    else: 
+    else:
         debug_log["Error_CSV"] = "找不到 rrg_daily_result.csv"
 
     # 2. 读 DB 微观数据
     if os.path.exists(db_path):
         try:
             conn = sqlite3.connect(db_path)
+            daily_df = pd.DataFrame()
+            ind_df = pd.DataFrame()
             dates_df = pd.read_sql("SELECT DISTINCT 日期 FROM stock_daily ORDER BY 日期 DESC LIMIT 5", conn)
             recent_dates = dates_df['日期'].tolist()
-            
+
             if len(recent_dates) >= 1:
                 placeholders = ','.join(['?'] * len(recent_dates))
                 # 🛡️ 防弹衣 1：用 SELECT * 替代写死字段名，避免数据库结构微调报错
                 daily_df = pd.read_sql(f"SELECT * FROM stock_daily WHERE 日期 IN ({placeholders})", conn, params=recent_dates)
                 ind_df = pd.read_sql("SELECT * FROM stock_industry", conn)
             conn.close()
-            
+
             if not daily_df.empty and not ind_df.empty:
                 # 动态识别列名
                 name_col_ind = '名称' if '名称' in ind_df.columns else ('股票名称' if '股票名称' in ind_df.columns else '代码')
                 if name_col_ind != '股票名称':
                     ind_df.rename(columns={name_col_ind: '股票名称'}, inplace=True)
-                    
+
                 close_col = '收盘' if '收盘' in daily_df.columns else ('最新价' if '最新价' in daily_df.columns else None)
                 if close_col and close_col != '收盘':
                     daily_df.rename(columns={close_col: '收盘'}, inplace=True)
 
                 daily_df['代码'], ind_df['代码'] = clean_stock_code(daily_df['代码']), clean_stock_code(ind_df['代码'])
                 daily_df, ind_df = daily_df[daily_df['代码'] != '000000'], ind_df[ind_df['代码'] != '000000']
-                
+
                 daily_df['收盘'] = pd.to_numeric(daily_df.get('收盘', 0), errors='coerce')
                 daily_df['涨跌幅'] = pd.to_numeric(daily_df.get('涨跌幅', 0), errors='coerce').fillna(0)
                 daily_df['成交额'] = pd.to_numeric(daily_df.get('成交额', 0), errors='coerce').fillna(0)
-                
+
                 pivot_close = daily_df.pivot(index='代码', columns='日期', values='收盘')
                 t0, t2, t4 = recent_dates[0], recent_dates[min(2, len(recent_dates)-1)], recent_dates[-1]
-                
+
                 ret_3d = ((pivot_close[t0] - pivot_close[t2]) / pivot_close[t2]) * 100
                 ret_5d = ((pivot_close[t0] - pivot_close[t4]) / pivot_close[t4]) * 100
-                
+
                 t0_df = daily_df[daily_df['日期'] == t0].copy()
                 t0_df['3日涨幅'], t0_df['5日涨幅'] = t0_df['代码'].map(ret_3d).fillna(0), t0_df['代码'].map(ret_5d).fillna(0)
-                
+
                 detail_df = pd.merge(t0_df, ind_df, on='代码', how='inner')
                 name_col = '股票名称'
-                
+
                 limit_up_raw = detail_df[detail_df['涨跌幅'] >= 9.8].copy()
                 if not limit_up_raw.empty:
                     limit_up_df = limit_up_raw[[name_col, '代码', '涨跌幅', '行业名称', '成交额']]
                     limit_up_df.columns = ['股票名称', '股票代码', '涨跌幅(%)', '所属板块', '成交额']
                     limit_up_df = limit_up_df.sort_values(by=['所属板块', '涨跌幅(%)'], ascending=[True, False]).reset_index(drop=True)
-                
+
                 top10_raw = detail_df.nlargest(10, '5日涨幅').copy()
                 if not top10_raw.empty:
                     top10_5d_df = top10_raw[[name_col, '代码', '5日涨幅', '行业名称']]
                     top10_5d_df.columns = ['股票名称', '股票代码', '5日涨幅(%)', '所属板块']
                     top10_5d_df.reset_index(drop=True, inplace=True)
                     top10_5d_df.index = top10_5d_df.index + 1
-                
+
                 sector_info = []
                 for sector, group in detail_df.groupby('行业名称'):
                     top1 = group.nlargest(5, '涨跌幅')
                     top3 = group.nlargest(5, '3日涨幅')
                     top5 = group.nlargest(5, '5日涨幅')
                     core3 = group.nlargest(3, '成交额')
-                    
+
                     sector_info.append({
                         '行业名称': sector,
                         '1日龙头': "、".join([f"{r[name_col]}({'+' if r['涨跌幅']>0 else ''}{r['涨跌幅']:.1f}%)" for _, r in top1.iterrows()]) or "-",
@@ -101,7 +113,7 @@ def load_cross_section_data():
                         '5日龙头': "、".join([f"{r[name_col]}({'+' if r['5日涨幅']>0 else ''}{r['5日涨幅']:.1f}%)" for _, r in top5.iterrows()]) or "-",
                         '核心中军': "、".join([f"{r[name_col]}" for _, r in core3.iterrows()]) or "-"
                     })
-                    
+
                 info_df = pd.DataFrame(sector_info)
                 df = pd.merge(df, info_df, on='行业名称', how='left').fillna("-")
         except Exception as e:
@@ -115,8 +127,8 @@ def load_cross_section_data():
 # 💾 数据引擎 2：轨迹时光机 (自适应雷达版)
 # ==========================================
 @st.cache_data
-def load_trajectory_data(days=45):
-    db_path = "./sample_data.db"
+def load_trajectory_data(days=45, db_signature=None):
+    db_path = DB_PATH
     if not os.path.exists(db_path): return pd.DataFrame()
     
     try:
@@ -188,8 +200,11 @@ def load_trajectory_data(days=45):
 # ==========================================
 # 📊 前端渲染主逻辑
 # ==========================================
-df, limit_up_df, top10_5d_df, debug_log = load_cross_section_data()
-traj_all_df = load_trajectory_data(days=45)
+df, limit_up_df, top10_5d_df, debug_log = load_cross_section_data(
+    file_signature(RRG_CSV_PATH),
+    file_signature(DB_PATH),
+)
+traj_all_df = load_trajectory_data(days=45, db_signature=file_signature(DB_PATH))
 
 if not df.empty:
     # 🛡️ 防弹衣 2：强制补齐画图所需的所有列（如果数据库合并失败，图表依然能画出宏观气泡！）
@@ -322,5 +337,5 @@ if not df.empty:
 
 else:
     st.error("🚨 致命错误：数据未能成功加载，页面渲染终止！")
-    st.write(f"1️⃣ CSV 宏观数据文件是否存在？: **{os.path.exists('./rrg_daily_result.csv')}**")
-    st.write(f"2️⃣ SQLite 微观数据库是否存在？: **{os.path.exists('./sample_data.db')}**")
+    st.write(f"1️⃣ CSV 宏观数据文件是否存在？: **{os.path.exists(RRG_CSV_PATH)}**")
+    st.write(f"2️⃣ SQLite 微观数据库是否存在？: **{os.path.exists(DB_PATH)}**")

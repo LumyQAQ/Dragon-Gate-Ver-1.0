@@ -4,10 +4,9 @@ import numpy as np
 from datetime import datetime
 import warnings
 
-warnings.filterwarnings('ignore')  # 屏蔽 pandas 的一些无关警告
+from config import DB_PATH, RRG_CSV_PATH
 
-# 数据库路径
-DB_PATH = "A_share_data.db"
+warnings.filterwarnings('ignore')  # 屏蔽 pandas 的一些无关警告
 
 
 def clean_stock_code(series):
@@ -18,8 +17,8 @@ def clean_stock_code(series):
     return s.str.zfill(6)  # 补齐 6 位 (1 -> 000001)
 
 
-def load_and_merge_data(days_lookback=60):
-    conn = sqlite3.connect(DB_PATH)
+def load_and_merge_data(days_lookback=60, db_path=DB_PATH):
+    conn = sqlite3.connect(db_path)
     print("🔍 正在启动数据体检与清洗...")
 
     daily_count = pd.read_sql("SELECT COUNT(*) FROM stock_daily", conn).iloc[0, 0]
@@ -129,23 +128,33 @@ def build_sector_rrg_data(df, rs_window=20, mom_window=5, smooth_window=3):
     return pd.DataFrame(rrg_results).dropna()
 
 
-if __name__ == "__main__":
-    df = load_and_merge_data(days_lookback=60)
+def build_rrg_snapshot(db_path=DB_PATH, csv_path=RRG_CSV_PATH, days_lookback=60):
+    df = load_and_merge_data(days_lookback=days_lookback, db_path=db_path)
 
     if df.empty:
         print("\n🛑 程序终止。")
-    else:
-        df = calculate_custom_factors(df)
-        result_df = build_sector_rrg_data(df)
+        return pd.DataFrame()
 
-        if result_df.empty:
-            print("\n🛑 数据量太少，请检查历史天数。")
-        else:
-            # 排序：优先看动量大且包含强力异动个股的板块
-            result_df = result_df.sort_values(by=['突破动能得分_气泡大小', '动量_Y'], ascending=[False, False])
-            print("\n✅ 策略计算完成！今日【量价齐升突破】板块追踪榜单 (前 10 名):")
-            print("-" * 75)
-            print(result_df.head(10).to_string(index=False))
-            print("-" * 75)
-            result_df.to_csv("rrg_daily_result.csv", index=False)
-            print("\n💾 最终坐标数据已保存至 rrg_daily_result.csv！")
+    df = calculate_custom_factors(df)
+    result_df = build_sector_rrg_data(df)
+
+    if result_df.empty:
+        print("\n🛑 数据量太少，请检查历史天数。")
+        return result_df
+
+    result_df = result_df.sort_values(by=['突破动能得分_气泡大小', '动量_Y'], ascending=[False, False])
+    result_df.to_csv(csv_path, index=False)
+    return result_df
+
+
+if __name__ == "__main__":
+    result_df = build_rrg_snapshot()
+
+    if result_df.empty:
+        pass
+    else:
+        print("\n✅ 策略计算完成！今日【量价齐升突破】板块追踪榜单 (前 10 名):")
+        print("-" * 75)
+        print(result_df.head(10).to_string(index=False))
+        print("-" * 75)
+        print(f"\n💾 最终坐标数据已保存至 {RRG_CSV_PATH}！")

@@ -5,8 +5,9 @@ import os
 from datetime import datetime, timedelta
 from tqdm import tqdm
 
+from config import DB_PATH
+
 # 下面是你的代码正文...
-DB_PATH = "A_share_data.db"
 
 
 def get_db_connection():
